@@ -55,7 +55,11 @@ fun PsiType?.toQualifiedName(): String? = when (this) {
     is PsiClassReferenceType -> this.resolve()?.qualifiedName
     // Class<SomeClass> object. Extract the <SomeClass> and call this method recursively to resolve it
     is PsiImmediateClassType -> this.parameters.firstOrNull()?.toQualifiedName()
-    is PsiWildcardType -> "java.lang.Object"
+    is PsiWildcardType -> when {
+        isExtends -> extendsBound.toQualifiedName()
+        isSuper -> superBound.toQualifiedName()
+        else -> "java.lang.Object"
+    } ?: "java.lang.Object"
     is PsiPrimitiveType -> if(name == "void") "void" else null
     else -> null
 }
@@ -77,13 +81,38 @@ fun PsiMethod.resolvePayloadType(): PsiType? {
         }
     }
     val type = (this as? UMethod ?: toUElement(UMethod::class.java))?.uastParameters?.getOrNull(0)?.typeReference?.type ?: return null
-    return if (type is PsiClassType && type.hasParameters()) {
-        // For example, CommandMessage<Class>
-        type.parameters[0]
-    } else {
-        type
+    if (type !is PsiClassType || !type.hasParameters()) {
+        return type
     }
+
+    val resolvedClass = type.resolve()
+    if (resolvedClass != null && resolvedClass.isAxonMessage()) {
+        // The previous implementation always returned the first generic parameter because
+        // handlers can declare Axon message envelopes such as CommandMessage<DeviceUpdatedEvent>.
+        // In those cases the payload we want to match lives in the envelope's type argument
+        // rather than the raw Message type, so we still unwrap the first parameter here.
+        return when (val parameterType = type.parameters.firstOrNull()) {
+            is PsiWildcardType -> when {
+                parameterType.isExtends -> parameterType.extendsBound
+                parameterType.isSuper -> parameterType.superBound
+                else -> parameterType.extendsBound
+            }
+            else -> parameterType
+        }
+    }
+
+    // Keep the raw type so handlers declared with generics (e.g. DeviceUpdatedEvent<?>) still match the event itself.
+    return type.rawType()
 }
+
+private fun PsiClass.isAxonMessage(): Boolean {
+    if (qualifiedName == AXON_MESSAGE_FQN) {
+        return true
+    }
+    return supers.any { superClass -> superClass.isAxonMessage() }
+}
+
+private const val AXON_MESSAGE_FQN = "org.axonframework.messaging.Message"
 
 /**
  * Resolves the psiType to a name and then finds the PsiClass within the project.
