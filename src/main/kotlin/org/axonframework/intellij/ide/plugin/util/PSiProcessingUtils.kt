@@ -54,7 +54,14 @@ import java.util.Locale
 fun PsiType?.toQualifiedName(): String? = when (this) {
     is PsiClassReferenceType -> this.resolve()?.qualifiedName
     // Class<SomeClass> object. Extract the <SomeClass> and call this method recursively to resolve it
-    is PsiImmediateClassType -> this.parameters.firstOrNull()?.toQualifiedName()
+    is PsiImmediateClassType -> {
+        val resolvedClass = resolve()
+        if (resolvedClass?.qualifiedName == "java.lang.Class" && parameters.isNotEmpty()) {
+            parameters.first().toQualifiedName()
+        } else {
+            resolvedClass?.qualifiedName
+        }
+    }
     is PsiWildcardType -> when {
         isExtends -> extendsBound.toQualifiedName()
         isSuper -> superBound.toQualifiedName()
